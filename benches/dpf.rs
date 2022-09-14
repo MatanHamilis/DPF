@@ -5,10 +5,11 @@ use criterion::{
     Criterion, Throughput,
 };
 use dpf::pir::dpf_based::{self, ResponseScratchpad};
-use dpf::pir::information_theoretic;
+use dpf::pir::information_theoretic::{self, Query};
 use dpf::{DpfKey, DPF_KEY_SIZE};
-use std::mem::MaybeUninit;
 use std::simd::u64x8;
+
+const LOG_BITS_IN_BYTE: usize = 3;
 
 fn dpf_gen<const DEPTH: usize>() -> (DpfKey<DEPTH>, DpfKey<DEPTH>) {
     let hiding_point = 0;
@@ -88,84 +89,58 @@ pub fn bench_dpf_evalall(g: &mut Criterion) {
     dpf_evalall_bench::<19>(g);
     dpf_evalall_bench::<20>(g);
 }
-pub fn bench_pir_single_info_theoretic<const DPF_DEPTH: usize, const BATCH: usize>(
+pub fn bench_pir_single<const DPF_DEPTH: usize>(
     c: &mut BenchmarkGroup<WallTime>,
     db: &[u64x8],
     query_index: usize,
 ) {
     let dpf_root_0 = [1u8; DPF_KEY_SIZE];
     let dpf_root_1 = [2u8; DPF_KEY_SIZE];
-    let mut keys_0: [MaybeUninit<DpfKey<DPF_DEPTH>>; BATCH] =
-        unsafe { [MaybeUninit::uninit().assume_init(); BATCH] };
-    let mut keys_1: [MaybeUninit<DpfKey<DPF_DEPTH>>; BATCH] =
-        unsafe { [MaybeUninit::uninit().assume_init(); BATCH] };
-    for i in 0..BATCH {
-        let (k_0, k_1) =
-            dpf::pir::dpf_based::gen_query::<DPF_DEPTH>(query_index, dpf_root_0, dpf_root_1);
-        keys_0[i].write(k_0);
-        keys_1[i].write(k_1);
-    }
-    let keys_0 = unsafe { keys_0.as_ptr().cast::<[DpfKey<DPF_DEPTH>; BATCH]>().read() };
-    let keys_1 = unsafe { keys_1.as_ptr().cast::<[DpfKey<DPF_DEPTH>; BATCH]>().read() };
+    let (k_0, k_1) =
+        dpf::pir::dpf_based::gen_query::<DPF_DEPTH>(query_index, dpf_root_0, dpf_root_1, db.len());
 
-    let mut output_0 = vec![
-        [u64x8::default(); BATCH];
-        (db.len() >> DPF_DEPTH) * std::mem::size_of::<u64x8>() / DPF_KEY_SIZE
-    ];
-    let mut output_1 = vec![
-        [u64x8::default(); BATCH];
-        (db.len() >> DPF_DEPTH) * std::mem::size_of::<u64x8>() / DPF_KEY_SIZE
-    ];
-    let mut scratchpad_0 = ResponseScratchpad::default();
-    let mut scratchpad_1 = ResponseScratchpad::default();
-    let batch = BATCH;
+    let columns_amount = DPF_KEY_SIZE << (LOG_BITS_IN_BYTE + DPF_DEPTH);
+    let mut output_0 = vec![u64x8::default(); db.len() / columns_amount];
+    let mut output_1 = vec![u64x8::default(); db.len() / columns_amount];
+    let eval_0 = k_0.eval_all();
+    let eval_1 = k_1.eval_all();
+    let mut scratch_0 = ResponseScratchpad::default();
+    let mut scratch_1 = ResponseScratchpad::default();
+    let query_0 = Query::new(unsafe {
+        std::slice::from_raw_parts(eval_0[..].as_ptr().cast(), eval_0.len() * DPF_KEY_SIZE)
+    });
+    let query_1 = Query::new(unsafe {
+        std::slice::from_raw_parts(eval_1[..].as_ptr().cast(), eval_1.len() * DPF_KEY_SIZE)
+    });
     c.throughput(Throughput::Bytes(
-        u64::try_from(db.len() * std::mem::size_of::<u64x8>() * BATCH).unwrap(),
+        u64::try_from(db.len() * std::mem::size_of::<u64x8>()).unwrap(),
     ));
-    c.bench_with_input(
-        BenchmarkId::new("information_theoretic_pir_batch", BATCH),
-        &batch,
-        |b, _param| {
+    c.bench_function(
+        BenchmarkId::from_parameter("information_theoretic_pir"),
+        |b| {
             b.iter(|| {
-                information_theoretic::answer_query_batched_into(
-                    db,
-                    &scratchpad_0.batched_query,
-                    &mut output_0[..],
-                );
-                information_theoretic::answer_query_batched_into(
-                    db,
-                    &scratchpad_1.batched_query,
-                    &mut output_1[..],
-                );
+                information_theoretic::answer_query_into(db, query_0, &mut output_0);
+                information_theoretic::answer_query_into(db, query_1, &mut output_1);
             });
         },
     );
-    c.bench_with_input(
-        BenchmarkId::new("dpf_pir_batch", BATCH),
-        &batch,
-        |b, _param| {
-            b.iter(|| {
-                dpf_based::answer_query_batched_into(db, &keys_0, &mut output_0, &mut scratchpad_0);
-                dpf_based::answer_query_batched_into(db, &keys_1, &mut output_1, &mut scratchpad_1);
-            });
-        },
-    );
+    c.bench_function(BenchmarkId::from_parameter("dpf_pir"), |b| {
+        b.iter(|| {
+            dpf_based::answer_query_into(db, &k_0, &mut output_0, &mut scratch_0);
+            dpf_based::answer_query_into(db, &k_1, &mut output_1, &mut scratch_1);
+        });
+    });
 }
 pub fn bench_pir(c: &mut Criterion) {
     const LOG_DB_SZ: usize = 33;
     const DB_SZ: usize = 1 << LOG_DB_SZ;
-    const DPF_DEPTH: usize = 11;
+    const DPF_DEPTH: usize = 9;
     const QUERY_INDEX: usize = 257;
-    let mut g = c.benchmark_group("pir_batch");
+    let mut g = c.benchmark_group("pir");
     let db: Vec<_> = (0..(DB_SZ / (std::mem::size_of::<u64x8>() * 8)))
         .map(|i| u64x8::splat(i as u64))
         .collect();
-    bench_pir_single_info_theoretic::<DPF_DEPTH, 1>(&mut g, &db, QUERY_INDEX);
-    bench_pir_single_info_theoretic::<DPF_DEPTH, 2>(&mut g, &db, QUERY_INDEX);
-    bench_pir_single_info_theoretic::<DPF_DEPTH, 4>(&mut g, &db, QUERY_INDEX);
-    bench_pir_single_info_theoretic::<DPF_DEPTH, 8>(&mut g, &db, QUERY_INDEX);
-    bench_pir_single_info_theoretic::<DPF_DEPTH, 16>(&mut g, &db, QUERY_INDEX);
-    bench_pir_single_info_theoretic::<DPF_DEPTH, 32>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<DPF_DEPTH>(&mut g, &db, QUERY_INDEX);
     g.finish();
 }
 
