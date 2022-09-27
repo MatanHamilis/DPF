@@ -8,7 +8,7 @@
 //!
 //! ### Classic DPF-based PIR
 //!
-//! In this scheme the client uploads a DPF key to each server who then [evaluate the whole DPF](`DpfKey<T>::eval_all()`) ,computes the dot-product of the expanded vector with the DB and returns the result (a single bit) to the client.
+//! In this scheme the client uploads a DPF key to each server who then [evaluate the whole DPF](`crate::DpfKey<T>::eval_all`) ,computes the dot-product of the expanded vector with the DB and returns the result (a single bit) to the client.
 //! This variant is also the most computationally-expensive as each server has to expand the DPF fully.
 //!
 //! ### Information Theoretic PIR
@@ -50,7 +50,7 @@ pub mod information_theoretic {
     pub struct OwnedQuery(Vec<u8>);
     impl AsRef<Query> for OwnedQuery {
         fn as_ref(&self) -> &Query {
-            &Query::new(&self.0[..])
+            Query::new(&self.0[..])
         }
     }
 
@@ -69,7 +69,7 @@ pub mod information_theoretic {
 
     impl From<Vec<u8>> for OwnedQuery {
         fn from(v: Vec<u8>) -> Self {
-            Self { 0: v }
+            Self(v)
         }
     }
 
@@ -142,7 +142,7 @@ pub mod information_theoretic {
     ///     assert_eq!(query[i], random_query[i]);
     /// }
     /// ```
-    pub fn gen_query<'a>(index: usize, random_query: &'a Query, db_size: usize) -> OwnedQuery {
+    pub fn gen_query(index: usize, random_query: &'_ Query, db_size: usize) -> OwnedQuery {
         let column_size = db_size / random_query.len_bits();
         let column_index = index / column_size;
         let mut output: OwnedQuery = OwnedQuery::from(random_query.to_vec());
@@ -190,7 +190,6 @@ pub mod dpf_based {
 
     use crate::pir::information_theoretic::Query;
     use crate::pir::LOG_BITS_IN_BYTE;
-    use crate::xor_arrays;
     use crate::xor_slices;
     use crate::DpfKey;
     use crate::DPF_KEY_SIZE;
@@ -267,9 +266,10 @@ pub mod dpf_based {
             )
         };
         let q = Query::new(scratch_slice);
-        information_theoretic::answer_query_into(db, &q, output);
+        information_theoretic::answer_query_into(db, q, output);
     }
 
+    /// Answer a single query.
     pub fn answer_query<const DEPTH: usize>(db: &[u64x8], query: &DpfKey<DEPTH>) -> Vec<u64x8> {
         // Each bit in the output of the DPF refers to a column in the DB.
         let columns_num = DPF_KEY_SIZE << (DEPTH + LOG_BITS_IN_BYTE);

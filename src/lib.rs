@@ -280,8 +280,8 @@ impl<const DEPTH: usize> DpfKey<DEPTH> {
         }
     }
 
-    /// Creates an Iterator
-    pub fn iter<'a>(&'a self) -> DpfIterator<'a, DEPTH> {
+    /// Creates an [`Iterator`] over the output of the DPF.
+    pub fn iter(&'_ self) -> DpfIterator<'_, DEPTH> {
         let mut output = self.first_word;
         let mut aux = self.first_toggle_bit;
         let iterator_state: [[([u8; DPF_KEY_SIZE], bool); 2]; DEPTH] = std::array::from_fn(|i| {
@@ -297,14 +297,15 @@ impl<const DEPTH: usize> DpfKey<DEPTH> {
             [(s_l, t_l), (s_r, t_r)]
         });
         DpfIterator {
-            dpf_key: &self,
+            dpf_key: self,
             iterator_state,
             iteration_path: [false; DEPTH],
             done: false,
         }
     }
 
-    pub fn bit_iter<'a>(&'a self) -> DpfBitIterator<'a, DEPTH> {
+    /// Can be used to iterate on the output of a DPF in a bit-by-bit fashion.
+    pub fn bit_iter(&'_ self) -> DpfBitIterator<'_, DEPTH> {
         let mut iter = self.iter();
         let current_item = iter.next();
         DpfBitIterator {
@@ -374,9 +375,7 @@ pub struct DpfBitIterator<'a, const DEPTH: usize> {
 impl<'a, const DEPTH: usize> Iterator for DpfBitIterator<'a, DEPTH> {
     type Item = bool;
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current_item == None {
-            return None;
-        }
+        self.current_item?;
         let item = ((self.current_item.unwrap()[self.bit_idx >> 3] >> (self.bit_idx & 7)) & 1) == 1;
         self.bit_idx += 1;
         self.bit_idx &= (DPF_KEY_SIZE << 3) - 1;
