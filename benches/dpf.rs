@@ -115,32 +115,74 @@ pub fn bench_pir_single<const DPF_DEPTH: usize>(
     c.throughput(Throughput::Bytes(
         u64::try_from(db.len() * std::mem::size_of::<u64x8>()).unwrap(),
     ));
-    c.bench_function(
-        BenchmarkId::from_parameter("information_theoretic_pir"),
-        |b| {
+    let log_column_size_in_bytes = 26 - DPF_DEPTH;
+    c.bench_with_input(
+        BenchmarkId::new("information_theoretic_pir", log_column_size_in_bytes),
+        &log_column_size_in_bytes,
+        |b, _| {
             b.iter(|| {
                 information_theoretic::answer_query_into(db, query_0, &mut output_0);
                 information_theoretic::answer_query_into(db, query_1, &mut output_1);
             });
         },
     );
-    c.bench_function(BenchmarkId::from_parameter("dpf_pir"), |b| {
-        b.iter(|| {
-            dpf_based::answer_query_into(db, &k_0, &mut output_0, &mut scratch_0);
-            dpf_based::answer_query_into(db, &k_1, &mut output_1, &mut scratch_1);
-        });
-    });
+    c.bench_with_input(
+        BenchmarkId::new("dpf_pir_bfs", log_column_size_in_bytes),
+        &log_column_size_in_bytes,
+        |b, _| {
+            b.iter(|| {
+                dpf_based::answer_query_into_with_scratchpad(
+                    db,
+                    &k_0,
+                    &mut output_0,
+                    &mut scratch_0,
+                );
+                dpf_based::answer_query_into_with_scratchpad(
+                    db,
+                    &k_1,
+                    &mut output_1,
+                    &mut scratch_1,
+                );
+            });
+        },
+    );
+    c.bench_with_input(
+        BenchmarkId::new("dpf_pir_dfs", log_column_size_in_bytes),
+        &log_column_size_in_bytes,
+        |b, _| {
+            b.iter(|| {
+                dpf_based::answer_query_into(db, &k_0, &mut output_0);
+                dpf_based::answer_query_into(db, &k_1, &mut output_1);
+            });
+        },
+    );
 }
 pub fn bench_pir(c: &mut Criterion) {
     const LOG_DB_SZ: usize = 33;
     const DB_SZ: usize = 1 << LOG_DB_SZ;
-    const DPF_DEPTH: usize = 9;
     const QUERY_INDEX: usize = 257;
+    const BITS_IN_BYTE: usize = 8;
     let mut g = c.benchmark_group("pir");
-    let db: Vec<_> = (0..(DB_SZ / (std::mem::size_of::<u64x8>() * 8)))
+    let db: Vec<_> = (0..(DB_SZ / (std::mem::size_of::<u64x8>() * BITS_IN_BYTE)))
         .map(|i| u64x8::splat(i as u64))
         .collect();
-    bench_pir_single::<DPF_DEPTH>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<1>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<2>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<3>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<4>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<5>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<6>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<7>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<8>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<9>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<10>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<11>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<12>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<13>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<14>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<15>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<16>(&mut g, &db, QUERY_INDEX);
+    bench_pir_single::<17>(&mut g, &db, QUERY_INDEX);
     g.finish();
 }
 

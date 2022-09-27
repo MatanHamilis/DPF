@@ -190,6 +190,8 @@ pub mod dpf_based {
 
     use crate::pir::information_theoretic::Query;
     use crate::pir::LOG_BITS_IN_BYTE;
+    use crate::xor_arrays;
+    use crate::xor_slices;
     use crate::DpfKey;
     use crate::DPF_KEY_SIZE;
 
@@ -230,20 +232,20 @@ pub mod dpf_based {
         DpfKey::gen(arr_idx, &hiding_value, dpf_root_0, dpf_root_1)
     }
 
-    /// Answer a single query,
-    pub fn answer_query<const DEPTH: usize>(
+    /// Answer a single query with a scratchpad.
+    pub fn answer_query_with_scratchpad<const DEPTH: usize>(
         db: &[u64x8],
         query: &DpfKey<DEPTH>,
         mut scratch: ResponseScratchpad<DEPTH>,
     ) -> (Vec<u64x8>, ResponseScratchpad<DEPTH>) {
         let columns_num = DPF_KEY_SIZE << (DEPTH + LOG_BITS_IN_BYTE);
         let mut output = vec![u64x8::default(); db.len() / columns_num];
-        answer_query_into(db, query, &mut output[..], &mut scratch);
+        answer_query_into_with_scratchpad(db, query, &mut output[..], &mut scratch);
         (output, scratch)
     }
 
-    /// A non allocating variant of [`answer_query`].
-    pub fn answer_query_into<const DEPTH: usize>(
+    /// A non allocating variant of [`answer_query_with_scratchpad`].
+    pub fn answer_query_into_with_scratchpad<const DEPTH: usize>(
         db: &[u64x8],
         query: &DpfKey<DEPTH>,
         output: &mut [u64x8],
@@ -267,30 +269,54 @@ pub mod dpf_based {
         let q = Query::new(scratch_slice);
         information_theoretic::answer_query_into(db, &q, output);
     }
+
+    pub fn answer_query<const DEPTH: usize>(db: &[u64x8], query: &DpfKey<DEPTH>) -> Vec<u64x8> {
+        // Each bit in the output of the DPF refers to a column in the DB.
+        let columns_num = DPF_KEY_SIZE << (DEPTH + LOG_BITS_IN_BYTE);
+        let mut output = vec![u64x8::default(); db.len() / columns_num];
+        answer_query_into(db, query, &mut output[..]);
+        output
+    }
+    /// A non allocating variant of [`answer_query`].
+    pub fn answer_query_into<const DEPTH: usize>(
+        db: &[u64x8],
+        query: &DpfKey<DEPTH>,
+        output: &mut [u64x8],
+    ) {
+        let columns_num = DPF_KEY_SIZE << (DEPTH + LOG_BITS_IN_BYTE);
+        assert_eq!(output.len() * columns_num, db.len());
+        for (selector_bit, column) in query.bit_iter().zip(db.chunks(output.len())) {
+            if selector_bit {
+                xor_slices(output, column)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::LOG_BITS_IN_BYTE;
-    use crate::pir::dpf_based::{answer_query, gen_query, ResponseScratchpad};
+    use crate::pir::dpf_based::{
+        answer_query, answer_query_with_scratchpad, gen_query, ResponseScratchpad,
+    };
     use crate::DPF_KEY_SIZE;
     use std::simd::u64x8;
 
     #[test]
     pub fn test_pir() {
         const LOG_BITS_IN_U64: usize = 6;
-        const LOG_DB_SZ: usize = 33;
+        const LOG_DB_SZ: usize = 25;
         const DB_SZ: usize = 1 << LOG_DB_SZ;
-        const DPF_DEPTH: usize = 12;
+        const DPF_DEPTH: usize = 6;
         const QUERY_INDEX: usize = 512;
         let entry_size = std::mem::size_of::<u64x8>() << LOG_BITS_IN_BYTE;
         let db: Vec<_> = (0..(DB_SZ / entry_size))
             .map(|i| u64x8::splat(i as u64))
             .collect();
-        let row_size = DPF_KEY_SIZE << (LOG_BITS_IN_BYTE + DPF_DEPTH);
-        let column_size = db.len() / row_size;
+        let number_of_columns = DPF_KEY_SIZE << (LOG_BITS_IN_BYTE + DPF_DEPTH);
+        let column_size_in_bits = DB_SZ / number_of_columns;
         let item_index = QUERY_INDEX / entry_size;
-        let item_index_in_column = item_index % column_size;
+        let item_index_in_column = item_index % column_size_in_bits;
         let lane_index = (QUERY_INDEX % entry_size) >> LOG_BITS_IN_U64;
         let bit_index = QUERY_INDEX & ((1 << LOG_BITS_IN_U64) - 1);
 

@@ -279,6 +279,112 @@ impl<const DEPTH: usize> DpfKey<DEPTH> {
             }
         }
     }
+
+    /// Creates an Iterator
+    pub fn iter<'a>(&'a self) -> DpfIterator<'a, DEPTH> {
+        let mut output = self.first_word;
+        let mut aux = self.first_toggle_bit;
+        let iterator_state: [[([u8; DPF_KEY_SIZE], bool); 2]; DEPTH] = std::array::from_fn(|i| {
+            let (mut s_l, mut t_l, mut s_r, mut t_r) = expand_seed(&output);
+            if aux {
+                xor_arrays(&mut s_l, &self.corrections[i].string);
+                xor_arrays(&mut s_r, &self.corrections[i].string);
+                t_l ^= self.corrections[i].bit_0;
+                t_r ^= self.corrections[i].bit_1;
+            }
+            output = s_l;
+            aux = t_l;
+            [(s_l, t_l), (s_r, t_r)]
+        });
+        DpfIterator {
+            dpf_key: &self,
+            iterator_state,
+            iteration_path: [false; DEPTH],
+            done: false,
+        }
+    }
+
+    pub fn bit_iter<'a>(&'a self) -> DpfBitIterator<'a, DEPTH> {
+        let mut iter = self.iter();
+        let current_item = iter.next();
+        DpfBitIterator {
+            dpf_iterator: iter,
+            current_item,
+            bit_idx: 0,
+        }
+    }
+}
+pub struct DpfIterator<'a, const DEPTH: usize> {
+    dpf_key: &'a DpfKey<DEPTH>,
+    iterator_state: [[([u8; DPF_KEY_SIZE], bool); 2]; DEPTH],
+    iteration_path: [bool; DEPTH],
+    done: bool,
+}
+
+impl<'a, const DEPTH: usize> Iterator for DpfIterator<'a, DEPTH> {
+    type Item = [u8; DPF_KEY_SIZE];
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+        // Prepare response
+        let (mut leaf, aux) = match self.iteration_path[DEPTH - 1] {
+            false => self.iterator_state[DEPTH - 1][0],
+            true => self.iterator_state[DEPTH - 1][1],
+        };
+        into_block(&mut leaf);
+        if aux {
+            xor_arrays(&mut leaf, &self.dpf_key.last_correction);
+        }
+
+        // Fix state
+        let mut fixing_start = DEPTH - 1;
+        while self.iteration_path[fixing_start] {
+            if fixing_start == 0 {
+                self.done = true;
+                return Some(leaf);
+            }
+            fixing_start -= 1;
+        }
+        self.iteration_path[fixing_start] = true;
+        let (mut output, mut aux) = self.iterator_state[fixing_start][1];
+        for i in fixing_start + 1..DEPTH {
+            self.iteration_path[i] = false;
+            let (mut s_l, mut t_l, mut s_r, mut t_r) = expand_seed(&output);
+            if aux {
+                xor_arrays(&mut s_l, &self.dpf_key.corrections[i].string);
+                xor_arrays(&mut s_r, &self.dpf_key.corrections[i].string);
+                t_l ^= self.dpf_key.corrections[i].bit_0;
+                t_r ^= self.dpf_key.corrections[i].bit_1;
+            }
+            output = s_l;
+            aux = t_l;
+            self.iterator_state[i] = [(s_l, t_l), (s_r, t_r)];
+        }
+
+        Some(leaf)
+    }
+}
+pub struct DpfBitIterator<'a, const DEPTH: usize> {
+    dpf_iterator: DpfIterator<'a, DEPTH>,
+    current_item: Option<[u8; DPF_KEY_SIZE]>,
+    bit_idx: usize,
+}
+
+impl<'a, const DEPTH: usize> Iterator for DpfBitIterator<'a, DEPTH> {
+    type Item = bool;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current_item == None {
+            return None;
+        }
+        let item = ((self.current_item.unwrap()[self.bit_idx >> 3] >> (self.bit_idx & 7)) & 1) == 1;
+        self.bit_idx += 1;
+        self.bit_idx &= (DPF_KEY_SIZE << 3) - 1;
+        if self.bit_idx == 0 {
+            self.current_item = self.dpf_iterator.next();
+        }
+        Some(item)
+    }
 }
 
 fn xor_arrays<const LENGTH: usize, T: Copy + BitXorAssign>(
@@ -288,6 +394,11 @@ fn xor_arrays<const LENGTH: usize, T: Copy + BitXorAssign>(
     for i in 0..LENGTH {
         lhs[i] ^= rhs[i];
     }
+}
+fn xor_slices<T: Copy + BitXorAssign>(lhs: &mut [T], rhs: &[T]) {
+    lhs.iter_mut().zip(rhs.iter()).for_each(|(l, r)| {
+        *l ^= *r;
+    })
 }
 
 fn usize_to_bits<const SIZE: usize>(num: usize) -> [bool; SIZE] {
@@ -340,5 +451,20 @@ mod tests {
                 assert_eq!(k_0_eval, point_val);
             }
         }
+    }
+
+    #[test]
+    fn test_dpf_iterator() {
+        const DEPTH: usize = 12;
+        const HIDING_POINT: usize = 0b100110;
+        let mut point_val = [2u8; DPF_KEY_SIZE];
+        let dpf_root_0 = [0u8; DPF_KEY_SIZE];
+        let dpf_root_1 = [1u8; DPF_KEY_SIZE];
+        point_val[0] = 1;
+        let (k_0, _) = DpfKey::<DEPTH>::gen(HIDING_POINT, &point_val, dpf_root_0, dpf_root_1);
+        let eval_all_0 = k_0.eval_all();
+        let eval_all_0_iter: Vec<_> = k_0.iter().collect();
+        assert_eq!(eval_all_0.len(), eval_all_0_iter.len());
+        assert_eq!(eval_all_0_iter, eval_all_0);
     }
 }
