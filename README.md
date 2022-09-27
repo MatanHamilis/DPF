@@ -10,3 +10,10 @@ With this primitive a unit vector $\vec{e}$ of size $N$ (that is, a vector with 
 In case you find a bug or have an extra feature in mind you are interested in, feel free to submit an issue at the issues page.
 
 Notice: This is a very early stage cryptographic library. USE AT YOUR OWN RISK! ZERO WARRENTY GUARANTEED.
+
+## Changelog
+
+### v0.2.0 (27/9/2022)
+
+- Removed Packed DPF.
+- Added DPF iterator.
