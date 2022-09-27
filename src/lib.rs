@@ -432,7 +432,7 @@ mod tests {
     }
     #[test]
     fn test_dpf_eval_all() {
-        const DEPTH: usize = 20;
+        const DEPTH: usize = 12;
         const HIDING_POINT: usize = 0b100110;
         let mut point_val = [2u8; DPF_KEY_SIZE];
         let dpf_root_0 = [0u8; DPF_KEY_SIZE];

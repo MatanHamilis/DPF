@@ -222,9 +222,9 @@ pub mod dpf_based {
         index: usize,
         dpf_root_0: [u8; DPF_KEY_SIZE],
         dpf_root_1: [u8; DPF_KEY_SIZE],
-        db_size: usize,
+        db_size_in_items: usize,
     ) -> (DpfKey<DEPTH>, DpfKey<DEPTH>) {
-        let column_size = db_size / (DPF_KEY_SIZE << (DEPTH + LOG_BITS_IN_BYTE));
+        let column_size = db_size_in_items / (DPF_KEY_SIZE << (DEPTH + LOG_BITS_IN_BYTE));
         let column_index = index / column_size;
         let (arr_idx, lane_idx, bit_idx) = index_to_coordinates(column_index);
         let mut hiding_value = [0u8; DPF_KEY_SIZE];
@@ -324,8 +324,10 @@ mod tests {
         let dpf_root_1 = [2u8; DPF_KEY_SIZE];
         let (k_0, k_1) = gen_query::<DPF_DEPTH>(item_index, dpf_root_0, dpf_root_1, db.len());
         let scratch = ResponseScratchpad::default();
-        let (output_0, scratch) = answer_query(&db, &k_0, scratch);
-        let (output_1, _) = answer_query(&db, &k_1, scratch);
+        let (output_0, scratch) = answer_query_with_scratchpad(&db, &k_0, scratch);
+        let (output_1, _) = answer_query_with_scratchpad(&db, &k_1, scratch);
+        let output_0_dfs = answer_query(&db, &k_0);
+        assert_eq!(output_0, output_0_dfs);
 
         assert_eq!(
             ((output_0[item_index_in_column][lane_index]
